@@ -62,7 +62,7 @@ export default async function EnrollStudentPage({
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <label htmlFor="rate_dollars" className="text-sm font-medium">
-              Rate per Pack ($) *
+              Package Price ($) *
             </label>
             <input
               id="rate_dollars"
@@ -71,7 +71,7 @@ export default async function EnrollStudentPage({
               step="0.01"
               min="0.01"
               required
-              placeholder="60.00"
+              placeholder="100.00"
               className="w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
@@ -101,6 +101,7 @@ export default async function EnrollStudentPage({
             className="w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="active">Active</option>
+            <option value="hns">Has Not Started</option>
             <option value="trial">Trial</option>
           </select>
         </div>

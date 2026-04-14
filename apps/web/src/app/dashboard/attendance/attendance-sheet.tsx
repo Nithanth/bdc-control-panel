@@ -38,7 +38,7 @@ export function AttendanceSheet({
 
   const handleMark = async (
     student: StudentRow,
-    status: "present" | "absent" | "excused"
+    status: "present" | "absent" | "excused" | "paused"
   ) => {
     setFeedback(null);
     startTransition(async () => {
@@ -122,6 +122,7 @@ export function AttendanceSheet({
     present: "bg-green-100 text-green-800 border-green-300",
     absent: "bg-red-100 text-red-800 border-red-300",
     excused: "bg-yellow-100 text-yellow-800 border-yellow-300",
+    paused: "bg-blue-100 text-blue-800 border-blue-300",
   };
 
   return (
@@ -178,6 +179,9 @@ export function AttendanceSheet({
                   {student.enrollmentStatus === "trial" && (
                     <Badge variant="secondary" className="text-xs">Trial</Badge>
                   )}
+                  {student.enrollmentStatus === "hns" && (
+                    <Badge variant="outline" className="text-xs border-blue-300 text-blue-700">Not Started</Badge>
+                  )}
                 </div>
               </div>
             </div>
@@ -192,7 +196,7 @@ export function AttendanceSheet({
                 </Badge>
               ) : (
                 <>
-                  {(["present", "absent", "excused"] as const).map((status) => (
+                  {(["present", "absent", "excused", "paused"] as const).map((status) => (
                     <button
                       key={status}
                       onClick={() => handleMark(student, status)}

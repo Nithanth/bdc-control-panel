@@ -7,7 +7,7 @@ export async function markAttendance(
   enrollmentId: string,
   customerId: string,
   classDate: string,
-  status: "present" | "absent" | "excused"
+  status: "present" | "absent" | "excused" | "paused"
 ) {
   const supabase = createClient();
 
@@ -71,7 +71,7 @@ export async function updateAttendanceStatus(
   customerId: string,
   enrollmentId: string,
   oldStatus: string,
-  newStatus: "present" | "absent" | "excused"
+  newStatus: "present" | "absent" | "excused" | "paused"
 ) {
   const supabase = createClient();
 
@@ -204,7 +204,7 @@ export async function unmarkAttendance(
 export async function bulkMarkAttendance(
   entries: { enrollmentId: string; customerId: string }[],
   classDate: string,
-  status: "present" | "absent" | "excused"
+  status: "present" | "absent" | "excused" | "paused"
 ) {
   const results: { customerId: string; success: boolean; error?: string }[] = [];
 
