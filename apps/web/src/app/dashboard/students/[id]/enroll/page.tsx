@@ -106,6 +106,21 @@ export default async function EnrollStudentPage({
         </div>
 
         <div className="space-y-2">
+          <label htmlFor="billing_mode" className="text-sm font-medium">
+            Billing Mode
+          </label>
+          <select
+            id="billing_mode"
+            name="billing_mode"
+            defaultValue="manual"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="manual">Manual — admin charges or student pays via link</option>
+            <option value="auto">Auto — charge card on file when pack completes</option>
+          </select>
+        </div>
+
+        <div className="space-y-2">
           <label htmlFor="notes" className="text-sm font-medium">Notes</label>
           <textarea
             id="notes"

@@ -105,6 +105,7 @@ export async function createEnrollment(formData: FormData) {
   const packSize = parseInt(formData.get("pack_size") as string) || 4;
   const rateCents = Math.round(parseFloat(formData.get("rate_dollars") as string) * 100);
   const status = (formData.get("status") as string) || "active";
+  const billingMode = (formData.get("billing_mode") as string) || "manual";
   const notes = (formData.get("notes") as string) || null;
 
   const { data, error } = await supabase
@@ -115,6 +116,7 @@ export async function createEnrollment(formData: FormData) {
       pack_size: packSize,
       rate_cents: rateCents,
       status,
+      billing_mode: billingMode,
       notes,
     })
     .select()

@@ -1,14 +1,12 @@
 // @ts-nocheck
 // Billing Worker — Supabase Edge Function
 // NOTE: This file runs in the Deno runtime (Supabase Edge Functions), not Node.
-// IDE TypeScript errors for Deno globals are expected and can be ignored.
-// Runs on cron (nightly). Charges students who have completed a pack of classes.
 //
-// Logic:
-// 1. Find all active enrollments
-// 2. For each, count unbilled present attendance
-// 3. While unbilled >= pack_size, charge the card and mark attendance as billed
-// 4. Handle errors gracefully (no card, failed charge → exceptions)
+// Two modes per enrollment:
+//   billing_mode = 'auto'   → auto-charge card on file when pack completes
+//   billing_mode = 'manual' → add to billing_queue as 'due', admin decides
+//
+// Runs on cron (nightly) or manual POST trigger.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -22,38 +20,27 @@ const SQUARE_BASE_URL =
 const SQUARE_ACCESS_TOKEN = Deno.env.get("SQUARE_ACCESS_TOKEN") || "";
 const SQUARE_LOCATION_ID = Deno.env.get("SQUARE_LOCATION_ID") || "";
 
-interface BillingResult {
-  enrollmentId: string;
-  customerId: string;
-  action: "charged" | "no_card" | "failed" | "skipped";
-  amountCents?: number;
-  error?: string;
-}
-
 Deno.serve(async (req) => {
-  // Only allow POST (from cron) or manual trigger
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
 
   const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_URL"),
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
   );
 
-  const results: BillingResult[] = [];
+  const summary = { queued: 0, charged: 0, failed: 0, no_card: 0, skipped: 0 };
+  const details = [];
 
-  // 1. Get all active enrollments
+  // 1. Get all active enrollments with billing_mode
   const { data: enrollments, error: enrollError } = await supabase
     .from("enrollments")
-    .select("id, customer_id, class_name, pack_size, rate_cents, current_pack, classes_in_pack")
+    .select("id, customer_id, class_name, pack_size, rate_cents, current_pack, classes_in_pack, billing_mode")
     .eq("status", "active");
 
   if (enrollError) {
-    return new Response(JSON.stringify({ error: enrollError.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json({ error: enrollError.message }, { status: 500 });
   }
 
   for (const enrollment of enrollments || []) {
@@ -68,73 +55,90 @@ Deno.serve(async (req) => {
     const unbilled = unbilledCount || 0;
 
     if (unbilled < enrollment.pack_size) {
-      results.push({
-        enrollmentId: enrollment.id,
-        customerId: enrollment.customer_id,
-        action: "skipped",
-      });
+      summary.skipped++;
       continue;
     }
 
-    // 3. Check for valid card
-    const { data: paymentMethod } = await supabase
-      .from("square_payment_methods")
-      .select("square_card_id")
-      .eq("customer_id", enrollment.customer_id)
-      .eq("is_default", true)
-      .eq("active", true)
-      .single();
-
-    if (!paymentMethod) {
-      results.push({
-        enrollmentId: enrollment.id,
-        customerId: enrollment.customer_id,
-        action: "no_card",
-        error: `Student has ${unbilled} unbilled classes but no card on file`,
-      });
-      continue;
-    }
-
-    // Get Square customer ID
+    // Get customer info
     const { data: customer } = await supabase
       .from("customers")
       .select("square_customer_id, first_name, last_name")
       .eq("id", enrollment.customer_id)
       .single();
 
-    if (!customer?.square_customer_id) {
-      results.push({
-        enrollmentId: enrollment.id,
-        customerId: enrollment.customer_id,
-        action: "no_card",
-        error: "Customer not synced to Square",
-      });
-      continue;
-    }
-
-    // 4. Charge in pack-sized batches
     let remainingUnbilled = unbilled;
     let currentPack = enrollment.current_pack;
 
     while (remainingUnbilled >= enrollment.pack_size) {
-      const idempotencyKey = `class-${enrollment.customer_id}-pack-${currentPack}`;
-      const description = `${enrollment.class_name} — Pack ${currentPack} (${enrollment.pack_size} classes) for ${customer.first_name} ${customer.last_name}`;
+      const packNumber = currentPack;
+      const description = `${enrollment.class_name} — Pack ${packNumber} (${enrollment.pack_size} classes) for ${customer?.first_name || "?"} ${customer?.last_name || "?"}`;
 
-      if (DRY_RUN) {
-        console.log(`[DRY RUN] Would charge ${enrollment.rate_cents} cents with key ${idempotencyKey}`);
-        results.push({
-          enrollmentId: enrollment.id,
-          customerId: enrollment.customer_id,
-          action: "skipped",
-          amountCents: enrollment.rate_cents,
-        });
+      // ── MANUAL MODE: just queue it ──
+      if (enrollment.billing_mode === "manual") {
+        // Check if already queued (idempotent)
+        const { data: existing } = await supabase
+          .from("billing_queue")
+          .select("id")
+          .eq("enrollment_id", enrollment.id)
+          .eq("pack_number", packNumber)
+          .single();
+
+        if (!existing) {
+          await supabase.from("billing_queue").insert({
+            enrollment_id: enrollment.id,
+            customer_id: enrollment.customer_id,
+            pack_number: packNumber,
+            amount_cents: enrollment.rate_cents,
+            status: "due",
+          });
+
+          details.push({ enrollment_id: enrollment.id, pack: packNumber, action: "queued" });
+          summary.queued++;
+        }
+
         currentPack++;
         remainingUnbilled -= enrollment.pack_size;
         continue;
       }
 
+      // ── AUTO MODE: charge the card ──
+
+      // Need card on file
+      const { data: paymentMethod } = await supabase
+        .from("square_payment_methods")
+        .select("square_card_id")
+        .eq("customer_id", enrollment.customer_id)
+        .eq("is_default", true)
+        .eq("active", true)
+        .single();
+
+      if (!paymentMethod || !customer?.square_customer_id) {
+        // No card → queue as due instead of silently failing
+        await supabase.from("billing_queue").upsert({
+          enrollment_id: enrollment.id,
+          customer_id: enrollment.customer_id,
+          pack_number: packNumber,
+          amount_cents: enrollment.rate_cents,
+          status: "due",
+          notes: "Auto-charge failed: no card on file",
+        }, { onConflict: "enrollment_id,pack_number" });
+
+        details.push({ enrollment_id: enrollment.id, pack: packNumber, action: "no_card" });
+        summary.no_card++;
+        break;
+      }
+
+      if (DRY_RUN) {
+        console.log(`[DRY RUN] Would charge ${enrollment.rate_cents}c key=class-${enrollment.customer_id}-pack-${packNumber}`);
+        currentPack++;
+        remainingUnbilled -= enrollment.pack_size;
+        summary.skipped++;
+        continue;
+      }
+
+      const idempotencyKey = `class-${enrollment.customer_id}-pack-${packNumber}`;
+
       try {
-        // Call Square Payments API
         const paymentResponse = await fetch(`${SQUARE_BASE_URL}/v2/payments`, {
           method: "POST",
           headers: {
@@ -145,10 +149,7 @@ Deno.serve(async (req) => {
           body: JSON.stringify({
             idempotency_key: idempotencyKey,
             source_id: paymentMethod.square_card_id,
-            amount_money: {
-              amount: enrollment.rate_cents,
-              currency: "USD",
-            },
+            amount_money: { amount: enrollment.rate_cents, currency: "USD" },
             customer_id: customer.square_customer_id,
             location_id: SQUARE_LOCATION_ID,
             autocomplete: true,
@@ -161,7 +162,6 @@ Deno.serve(async (req) => {
         if (!paymentResponse.ok || paymentData.errors) {
           const errorMsg = paymentData.errors?.[0]?.detail || "Square payment failed";
 
-          // Record failed charge
           await supabase.from("charges").insert({
             customer_id: enrollment.customer_id,
             amount_cents: enrollment.rate_cents,
@@ -174,21 +174,23 @@ Deno.serve(async (req) => {
             error_detail: paymentData.errors || { error: errorMsg },
           });
 
-          results.push({
-            enrollmentId: enrollment.id,
-            customerId: enrollment.customer_id,
-            action: "failed",
-            amountCents: enrollment.rate_cents,
-            error: errorMsg,
-          });
+          await supabase.from("billing_queue").upsert({
+            enrollment_id: enrollment.id,
+            customer_id: enrollment.customer_id,
+            pack_number: packNumber,
+            amount_cents: enrollment.rate_cents,
+            status: "failed",
+            notes: errorMsg,
+          }, { onConflict: "enrollment_id,pack_number" });
 
-          // Don't block other packs / students
+          details.push({ enrollment_id: enrollment.id, pack: packNumber, action: "failed", error: errorMsg });
+          summary.failed++;
           break;
         }
 
         const payment = paymentData.payment;
 
-        // Insert charge record
+        // Record charge
         const { data: charge } = await supabase
           .from("charges")
           .insert({
@@ -216,91 +218,54 @@ Deno.serve(async (req) => {
           .limit(enrollment.pack_size);
 
         if (unbilledRows) {
-          const ids = unbilledRows.map((r) => r.id);
           await supabase
             .from("attendance")
             .update({ billed: true, charge_id: charge?.id })
-            .in("id", ids);
+            .in("id", unbilledRows.map((r) => r.id));
         }
 
-        // Update enrollment pack counters
+        // Mark billing queue as paid
+        await supabase.from("billing_queue").upsert({
+          enrollment_id: enrollment.id,
+          customer_id: enrollment.customer_id,
+          pack_number: packNumber,
+          amount_cents: enrollment.rate_cents,
+          status: "paid",
+          charge_id: charge?.id,
+          paid_at: new Date().toISOString(),
+        }, { onConflict: "enrollment_id,pack_number" });
+
         currentPack++;
         remainingUnbilled -= enrollment.pack_size;
 
-        await supabase
-          .from("enrollments")
-          .update({
-            current_pack: currentPack,
-            classes_in_pack: remainingUnbilled,
-          })
-          .eq("id", enrollment.id);
+        await supabase.from("enrollments").update({
+          current_pack: currentPack,
+          classes_in_pack: remainingUnbilled,
+        }).eq("id", enrollment.id);
 
-        // Audit log
         await supabase.from("audit_log").insert({
           action: "billing.charged",
           table_name: "charges",
           record_id: charge?.id,
-          new_data: {
-            enrollment_id: enrollment.id,
-            pack: currentPack - 1,
-            amount_cents: enrollment.rate_cents,
-            square_payment_id: payment.id,
-          },
+          new_data: { enrollment_id: enrollment.id, pack: packNumber, amount_cents: enrollment.rate_cents },
         });
 
-        results.push({
-          enrollmentId: enrollment.id,
-          customerId: enrollment.customer_id,
-          action: "charged",
-          amountCents: enrollment.rate_cents,
-        });
+        details.push({ enrollment_id: enrollment.id, pack: packNumber, action: "charged" });
+        summary.charged++;
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "Unknown error";
-        results.push({
-          enrollmentId: enrollment.id,
-          customerId: enrollment.customer_id,
-          action: "failed",
-          amountCents: enrollment.rate_cents,
-          error: errorMsg,
-        });
+        details.push({ enrollment_id: enrollment.id, pack: packNumber, action: "failed", error: err.message });
+        summary.failed++;
         break;
       }
     }
   }
 
   // Summary audit log
-  const charged = results.filter((r) => r.action === "charged");
-  const failed = results.filter((r) => r.action === "failed");
-  const noCard = results.filter((r) => r.action === "no_card");
-
   await supabase.from("audit_log").insert({
     action: "billing.run_complete",
-    table_name: "charges",
-    metadata: {
-      dry_run: DRY_RUN,
-      total_enrollments: enrollments?.length || 0,
-      charged: charged.length,
-      failed: failed.length,
-      no_card: noCard.length,
-      skipped: results.filter((r) => r.action === "skipped").length,
-      total_charged_cents: charged.reduce((sum, r) => sum + (r.amountCents || 0), 0),
-    },
+    table_name: "billing_queue",
+    metadata: { dry_run: DRY_RUN, ...summary },
   });
 
-  return new Response(
-    JSON.stringify({
-      dry_run: DRY_RUN,
-      summary: {
-        total: enrollments?.length || 0,
-        charged: charged.length,
-        failed: failed.length,
-        no_card: noCard.length,
-      },
-      results,
-    }),
-    {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+  return Response.json({ dry_run: DRY_RUN, summary, details });
 });
