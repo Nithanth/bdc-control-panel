@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import type { Customer, Enrollment } from "@/lib/types";
 import { EnrollmentStatusButton } from "./enrollment-status-button";
+import { SyncSquareButton } from "./sync-square-button";
 
 export default async function StudentDetailPage({
   params,
@@ -48,6 +49,13 @@ export default async function StudentDetailPage({
     .eq("customer_id", params.id)
     .order("created_at", { ascending: false })
     .limit(10);
+
+  // Fetch payment methods
+  const { data: paymentMethods } = await supabase
+    .from("square_payment_methods")
+    .select("*")
+    .eq("customer_id", params.id)
+    .order("created_at", { ascending: false });
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -94,6 +102,15 @@ export default async function StudentDetailPage({
         </div>
       </div>
 
+      {/* Square status */}
+      <div className="mt-4 flex items-center gap-2 text-sm">
+        {typedStudent.square_customer_id ? (
+          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">Square synced</Badge>
+        ) : (
+          <SyncSquareButton customerId={params.id} />
+        )}
+      </div>
+
       {/* Info grid */}
       {(typedStudent.date_of_birth || typedStudent.notes) && (
         <div className="mt-6 rounded-lg border p-4">
@@ -113,6 +130,54 @@ export default async function StudentDetailPage({
           </div>
         </div>
       )}
+
+      {/* Payment Methods */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Payment Methods</h3>
+          <Link
+            href={`/dashboard/students/${params.id}/add-card`}
+            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            + Add Card
+          </Link>
+        </div>
+
+        {!paymentMethods || paymentMethods.length === 0 ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            No cards on file.{" "}
+            <Link href={`/dashboard/students/${params.id}/add-card`} className="text-primary hover:underline">
+              Add one
+            </Link>
+          </p>
+        ) : (
+          <div className="mt-4 space-y-2">
+            {paymentMethods.map((pm) => (
+              <div key={pm.id} className="flex items-center justify-between rounded-lg border p-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-lg">💳</span>
+                  <div>
+                    <p className="font-medium">
+                      {pm.card_brand} ending in {pm.last_four}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Expires {pm.exp_month}/{pm.exp_year}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {pm.is_default && (
+                    <Badge variant="outline" className="text-xs">Default</Badge>
+                  )}
+                  {!pm.active && (
+                    <Badge variant="destructive" className="text-xs">Inactive</Badge>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Enrollments */}
       <div className="mt-8">
