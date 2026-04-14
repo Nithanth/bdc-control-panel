@@ -35,15 +35,52 @@ packages/shared/        ← shared TypeScript types and Square client
 tests/billing/          ← billing logic test suite
 ```
 
-## Setup (once Phase 1 build begins)
+## Prerequisites
 
-1. Clone the repo
-2. `cp .env.example .env.local` and fill in Supabase + Square sandbox credentials
-3. `npm install`
-4. `npx supabase start` (local Supabase via Docker)
-5. `npx supabase db push` to apply migrations
-6. `npm run dev` in `apps/web/`
-7. Open `http://localhost:3000`
+- Node.js 18+
+- npm
+- A free [Supabase](https://supabase.com) account (cloud — no Docker needed)
+
+## Local development setup
+
+### 1. Create a Supabase project
+
+1. Go to [supabase.com/dashboard](https://supabase.com/dashboard) and create a new project
+2. Pick any name and a strong database password (save it somewhere)
+3. Wait for the project to finish provisioning (~1 min)
+
+### 2. Get your API keys
+
+1. In the Supabase Dashboard, go to **Settings → API**
+2. Copy the **Project URL** and **anon (public)** key
+3. Paste them into `apps/web/.env.local` (the file already exists with placeholders)
+4. Also copy the **service_role (secret)** key into the same file
+
+### 3. Apply the database schema
+
+1. In the Supabase Dashboard, go to **SQL Editor**
+2. Open `supabase/migrations/0001_init.sql` from this repo, copy the contents, paste into the SQL Editor, and click **Run**
+
+### 4. Seed the test admin user
+
+1. In the Supabase Dashboard, go to **Authentication → Users → Add user → Create new user**
+2. Email: `admin@bollywooddancecentral.com`, Password: `password123`, check **Auto Confirm User**
+3. Copy the user's UUID from the users list
+4. Go to **SQL Editor** and run (replacing the UUID):
+   ```sql
+   insert into public.app_users (id, email, role)
+   values ('<paste-uuid-here>', 'admin@bollywooddancecentral.com', 'owner');
+   ```
+
+### 5. Run the app
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) and log in with `admin@bollywooddancecentral.com` / `password123`.
 
 ## Working with AI agents
 
