@@ -8,7 +8,7 @@ Admin platform for Bollywood Dance Central. Replaces spreadsheet-based studio op
 
 - [x] Master spec written (`docs/README.md`)
 - [x] Spec generation prompts ready (`docs/spec-generation-prompts.md`)
-- [ ] Sub-docs generated (architecture, schema, security, etc.)
+- [x] Sub-docs generated (architecture, schema, security, square, reliability, classes module, phase 1 plan)
 - [ ] Phase 1 build (Classes module)
 - [ ] Phase 2 build (Gigs)
 - [ ] Phase 3 build (Expenses + Reporting)
